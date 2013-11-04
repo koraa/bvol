@@ -1,0 +1,32 @@
+#! /bin/bash
+
+btut_lsall() {
+  vol="`readlink -f "$1"`"
+  btrfs sub list -a "$vol" | awk -v vol="$vol" '{print vol "/" $NF}'
+}
+
+btut_ls() {
+  btut_lsall "$1" | grep -v @
+}
+
+btut_rsnap() {
+  btut_ls "$1" |  awk -v N="$2" '{print; print $0 "@" N}' \
+    | while read s && read d; do 
+        btrfs subvolume snapshot -r "$s" "$d"
+      done
+}
+
+
+##############################################
+# Start
+
+cmd="$1"
+shift
+
+ex='^(rsnap|ls|lsall)$'
+grep -P "$ex" <<< "$cmd" >/dev/null || {
+  echo >&2 "You need to specify a btut command $ex"
+  exit 2
+}
+
+"btut_$cmd" "$@"
