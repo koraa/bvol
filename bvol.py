@@ -85,6 +85,59 @@ def btrfs_list(mnt):
     x= ( (e.path, e) for e in x)
     return dict(x)
 
+class __BtrfsShowData:
+    def __init__(self, lines):
+        i = map(lines)
+        
+
+        # (State 1) First line should be the path
+        self.redpath = i.__next__().strip()
+
+        # (State 2) Read custom attrs
+        self.attr = av = {}
+        for a in i:
+            # Extract keys and values:
+            # Split in twom strip spaces, kay is always
+            # lowercase
+            kv= a.split(":", 1)
+            kv= (s.strip for s in kv)
+            [key__, val] = kv
+            key = key.lower()
+
+            # Check if we already are at the snapshots
+            if key.startswith("snapshot") && empty(val):
+                break
+
+            # And add to the dict if props red
+            av[key] = val
+
+        # (State 3) Read any snapshots
+        self.snap = (s.strip() for s in i)
+
+        # Map some of the known attrs to class fields
+        # TODO: This should be able to parse empty values ('-')
+        # TODO: Parse flags as array
+        self.name = default(av, "name")
+        self.uuid = default(av, "uuid")
+        self.parent_uuid = default(av, "parent uuid")
+        self.t_creat = default(av, "creation time")
+        self.Oid = default(av, "object id")
+        self.gen = default(av, "generation (gen)")
+        self.gen_creat = default(av, "gen at creation")
+        self.parent = default(av, "parent")
+        self.toplvl = default(av, "top level")
+        self.flags = default(av, "flags")
+
+def btrfs_list(mnt):
+    """Returns a __BtrfsShowData array that contains a
+    parsed version of the output of `btrfs show ...`."""
+    proc = sub.Popen(['btrfs', 'sub', 'show', mnt],
+            stdout = sub.PIPE,
+            stderr=sys.stderr, stdin=sys.stdin)
+
+    lines= iter(proc.stdout.readline, b'')
+    lines= map(ttystr, lines)
+    return __BtrfsShowData(lines)
 
 class BVol:
     # TODO: Subvol: with snapname <=> without
