@@ -1,32 +1,145 @@
 #! /bin/bash
 
-btut_lsall() {
+##########################################
+# INIT
+
+test -n "$BVOL_ROOT" || BVOL_ROOT="/bvol/"
+
+##########################################
+# Helper
+
+#
+# List all elements of namespace $1
+#
+nsls() {
+  declare -F | awk -v ns="$1" '
+    $0 ~ ns {
+      sub("declare -f ","")
+      print $0
+    }
+  '
+}
+
+# Command namespace: Call a function called $1_$2
+ns() {
+  cmd="$1_$2"
+  shift 2
+  
+  # Does the function exist?
+  declare -F "$cmd" >/dev/null || {
+    hcm="$1_help"
+    # Does the help function exist
+    declare -F "$hcm" >/dev/null && {
+      "$hcm"
+    } || {
+      nsls $1 | awk -v ns="$1" -v cmd="$2" '
+        BEGIN {
+          print "There is no command " cmd " in namespace " ns ". "
+          print "The following commands are supported for " ns ": "
+          print
+          printf "  "
+        }
+        { 
+          sub(ns "_","")
+          printf $0 ", "
+        }
+        END { printf "\b\b.\n" }
+      '
+    }
+    return 1
+  }
+  # The function exists
+
+  "$cmd" "$@" 
+}
+
+confirm() {
+  read "?${1:-'Continue?'} all-caps yes to confirm [yes/no]: " I &&
+    test "$I" = "no"
+}
+
+# Err
+err() {
+  echo "[ERROR] $1" >&2
+  exit "${2:-29}"
+}
+
+# Check if $1 begins with $2
+begw() {
+  # $1 `beginswith` $2 AND len($1) >= len($2)
+  test "${1:0:${#2}}" = "${2}" -a "${#1}" -ge "${#2}"
+}
+
+# Check if $2 is in $1 or $1 itself and prints the canonical path o:w
+indir() {
+  f="`readlink -f $2`"
+  d="`readlink -f $1`"
+  begw "$f" "$d" || test "$f" = "$d"
+}
+
+vol() {
+  vp="`readlink -f "$BVOL_ROOT/$1"`"
+  indir "$BVOL_ROOT" "$vp" && test -d "$vp" \
+    || err "Volume not found"               \
+    && echo "$vp"
+}
+
+############################################
+# Commands
+
+bvol_attach() {
+  # TODO: Mount opts
+  # TODO: Force first level
+  mkdir -p $BVOL_ROOT/$2
+  echo mount $1 "$BVOL_ROOT/$2"
+}
+
+bvol_detach() {
+  echo umount "$(vol "$1")"
+}
+
+bvol_lsall() {
   vol="`readlink -f "$1"`"
-  btrfs sub list -a "$vol" | awk -v vol="$vol" '{print vol "/" $NF}'
+  echo btrfs sub list -a "$vol" | awk -v vol="$vol" '{print vol "/" $NF}'
 }
 
-btut_ls() {
-  btut_lsall "$1" | grep -v @
+bvol_ls() {
+  bvol_lsall "$1" | awk '!$0 ~ "@" {print $0}'
 }
 
-btut_rsnap() {
-  btut_ls "$1" |  awk -v N="$2" '{print; print $0 "@" N}' \
-    | while read s && read d; do 
-        btrfs subvolume snapshot -r "$s" "$d"
-      done
+bvol_del() {
+  vol="`readlink -f "$1"`"
+  confirm "Really delete $vol?" &&
+    echo btrfs sub del "$vol"
 }
 
+bvol_rdel() {
+  found="`bvol_ls "$1"`"
+  echo "Delete: $found."
+  confirm "Really delete all those subvolumes?" &&
+    <<< "$found" | while read v; do
+      echo btrfs sub del "$v"
+    done
+}
+
+bvol_snap() {
+  vol="`vol "$1"`"
+  test -n "$2" || err "You must specify a snapshot name" 2
+  echo btrfs subvlume snapshot -t "$vol" "$vol@$2"
+}
+
+bvol_rsnap() {
+  test -n "$2" || err "You must specify a snapshot name" 2
+  bvol_ls "$1" | while read v; do 
+    bvol_snap "$v" "$2"
+  done
+}
+
+bvol_autosnap() {
+
+}
 
 ##############################################
 # Start
 
-cmd="$1"
-shift
-
-ex='^(rsnap|ls|lsall)$'
-grep -P "$ex" <<< "$cmd" >/dev/null || {
-  echo >&2 "You need to specify a btut command $ex"
-  exit 2
-}
-
-"btut_$cmd" "$@"
+ns bvol "$@"
