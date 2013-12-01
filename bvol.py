@@ -59,6 +59,27 @@ def ttystr(b):
     else:
         return b
 
+def wrap_iter(e):
+    """Force the element to be an iterable. 
+    Returns just the element if it's already an iterable,
+    otherwise returns a tuple with `e` as the single element."""
+    if hasattr(e, '__iter__'):
+        return e
+    else:
+        return (e,)
+
+def unwrap_iter(l__):
+    """Reverse of wrap_iter.
+    If l__ contains a single element l__[0] is returned.
+    If it is empty or contains more a,
+    list with all the elements is returned.
+    Note that this always evaluates iterables."""
+    l = list(l)
+    if len(l) == 1:
+        return l[1]
+    else:
+        return l
+
 #######################################################
 # BTRFS
 
@@ -344,7 +365,7 @@ class BVol:
                 join(subvol, '@', name, delm=""),
                 readonly=True)
         
-    def do_destroy(self, name, **A):
+    def do_destroy(self, **A):
         """Destroys this volume. Does not work on roots and
         pools. If the volume has childs the 'recursive' flag
         must be used. Returns the bvols of the volumes
@@ -360,9 +381,39 @@ class BVol:
                 stdout = STDOUT, stderr = STDERR,
                 stdin = STDIN,
                 cwd=self.cwd())
-        return todel
+        return unwrap_iter(todel)
 
-    def __do_autosnap_DROP(self, typ, limit, **A):
+    def __do_autosnap_DROP_parse(self, typ, limit, pref, splitc, **A):
+        "Parse info for a snapshot and make shure it is
+        valid and fits the given arguments.  Returns either None (if
+        it is invalid) or the unixtime at the creation of this snapshot."
+        try:
+            n = s.snapname()
+            n_seg = split(splitc)
+            (p, time__, suf) = nseg
+            time = int(time__)
+        except:
+            return None
+
+        if p != prefix 
+                or typ != suf
+                or len(n_set) != 3:
+            return None
+
+        return time
+
+    def __do_autosnap_DROP(self, typ, limit, pref, splitc, **A):
+        """Implements the dropping functionality for old
+        snapshots with do_autosnap."""
+        cands= self.snapshots()
+        cands= (v.__do_autosnap_DROP_parse(typ, limit, pref, splitc, **A) for v in cands)
+        cands= sorted(cands)
+        cands= cands[limit:]
+
+        deld= ( v.do_destroy() for v in cands)
+        deld= deld
+
+        return list(deld)
 
     def do_autosnap(self, typ, limit, **A):
         """For automatic creation of snapshots: Creates
@@ -377,15 +428,18 @@ class BVol:
         Returns a tuple consisting of iterables for (1) the
         newly created snapshots and (2) the snapshots
         destroyed."""
-        new = self.do_snap(
+        new= self.do_snap(
                 join("auto", epoch(), typ, delim="_"),
                 **A)
+        new= cast_iter(new)
+        new= list(new)
 
         dropped= (v.get_orig() for v in new)
-        dropped= (v.__do_autosnap_DROP(typ, limit, **A) for v in dropped)
+        dropped= (v.__do_autosnap_DROP(typ, limit, "auto", "_", **A) for v in dropped)
         dropped= flat1(dropped)
+        dropped= list(dropped)
 
-        return map(list, (new, dropped))
+        return (new, dropped)
 
 
 ######################################################
