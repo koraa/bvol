@@ -7,8 +7,10 @@
 # TODO: recurse in named args is bad style
 # TODO: Some verbose output
 # TODO: Checks should do actual checks in FS
+# TODO: Mount/Unmount
+# TODO: Attach/Detach
 
-import argparse
+import argparse as ap
 import tarfile
 import time
 import sys
@@ -89,6 +91,11 @@ def compatl(l):
     None values."""
     return (v for v in l if v != None)
 
+def tail(l):
+    """Tail of a list.
+    All elements except the first."""
+    return l[1:]
+
 def XOR(*arg):
     """Boolean XOR. Inverse of XNOR.
     Takes any number of arguments. Will return true, if the
@@ -108,7 +115,7 @@ def XNOR(*arg):
 # BTRFS
 
 class __BtrfsListEntry:
-    """Holds info about a btrfs Root. Properties:
+    """Holds info about a btrfs Prefix. Properties:
     id, generation, level, path"""
 
     def __init__(self, line):
@@ -134,38 +141,37 @@ class BVolAssertError(IOError):
     pass
 
 class BVol:
-    def fromPathInRoot(root, pa):
+    def fromPathInPrefix(prefix, pa):
         pool, subvol = fill(pa.split("/", 1), 2, '')
         self.fromPathInPool(rppt, pool, subvol)
 
-    # TODO: Subvol: with snapname <=> without
     # TODO: Use [path]
     @staticmethod
-    def fromPathInPool(root, pool, subvol):
+    def fromPathInPool(prefix, pool, subvol):
         pathar = subvol.split('/')
         atsegs = pathar[-1].split("@")
         if len(atsegs) > 1:
             snap = atsegs.pop()
             name = join(atsegs, '')
             pathar[-1] = name
-            return BVol(root, pool, join(pathar, '/'), snap)
+            return BVol(prefix, pool, join(pathar, '/'), snap)
         else:
-            return BVol(root, pool, subvol)
+            return BVol(prefix, pool, subvol)
     
 
-    def __init__(self, root, pool='', subvol='', snapname=''):
+    def __init__(self, prefix, pool='', subvol='', snapname=''):
         """
         Instanciate a BVol object from it'S components:
-            root - The root for all BVols, by default /bvol.
+            prefix - The prefix for all BVols, by default /bvol.
                    Must be absolute
-            pool - The *name* of the pool (under  root).
-                   Must be '' if this is a root.
+            pool - The *name* of the pool (under  prefix).
+                   Must be '' if this is a prefix.
             subvol - The path of subvol, by default.
-                     Must be '' if this is a pool or root.
+                     Must be '' if this is a pool or prefix.
             snapname - The name of the snapshot if this is a
                    snapshot. Mus
         """
-        self.root = root
+        self.prefix = prefix
         self.vol = vol
         self.subvol = subvol
 
@@ -178,21 +184,21 @@ class BVol:
 
     def __cwd(self):
         """Directory this normally operates in"""
-        return self.get_root().pathin_fs()
+        return self.get_prefix().pathin_fs()
 
     def pathin_fs(self):
         """Returns the absolute path of this volume in the
-        root fs."""
-        return path.join(root, pool, subvol + self.__snapsuf())
+        prefix fs."""
+        return path.join(prefix, pool, subvol + self.__snapsuf())
 
     def pathin_pool(self):
         """Returns the path of this subvol relative to the
-        pool. Will return .' if this is a subvol or root."""
+        pool. Will return .' if this is a subvol or prefix."""
         return subvol + self.__snapsuf()
 
-    def pathin_root(self):
+    def pathin_prefix(self):
         """Returns the path of this subvolume relative to
-        the pool. Returns ''  if this is a root."""
+        the pool. Returns ''  if this is a prefix."""
         return pool + self.pathin_pool()
 
 
@@ -233,7 +239,7 @@ class BVol:
     def is_subvol(self):
         return not empty(self.pool) and not empty(self.subvol)
 
-    def is_root(self):
+    def is_prefix(self):
         return     empty(self.pool) and     empty(self.subvol)
 
     def is_snap(self):
@@ -258,7 +264,7 @@ class BVol:
                 "\nREASON: ", stat, msg,
                 "\nDURING: ", action,
                 "\nBVol: ", self.pathin_fs,
-                "\n| ROOT: ", self.root,
+                "\n| PREFIX: ", self.prefix,
                 "\n| POOL: ", self.pool,
                 "\n| SUBV: ", self.subvol,
                 "\n| SNAP: ", self.snapname,
@@ -277,11 +283,11 @@ class BVol:
         _ver_(self.is_pool(),
                 "BVol is a pool", expect, skip)
 
-    def ver_root(action="--", expect=True, skip=False):
-        """Raise an error if this bvol is a root or if it is
+    def ver_prefix(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a prefix or if it is
         not, depending on expect."""
-        _ver_(self.is_root(),
-                "BVol is a root", expect, skip)
+        _ver_(self.is_prefix(),
+                "BVol is a prefix", expect, skip)
 
     def ver_pool(action="--", expect=True, skip=False):
         """Raise an error if this bvol is a pool or if it is
@@ -303,33 +309,33 @@ class BVol:
 
     def get_container(self):
         """Returns the volume holding this volume or '' if
-        this is a root."""
+        this is a prefix."""
         return BVol.from_path(path.dirname(self.pathin_fs()))
 
     def get_pool(self):
         """Get the pool of this volume.
         Will return self if this is a pool, or None if this
-        is a root."""
-        if self.is_root():
+        is a prefix."""
+        if self.is_prefix():
             return None
         elif self.is_pool():
             return self
         else:
-            return BVol(self.root, self.pool, '')
+            return BVol(self.prefix, self.pool, '')
 
-    def get_root(self):
-        """Get the root volume of this volume. Returns self
-        if this is a root."""
-        if self.is_root():
+    def get_prefix(self):
+        """Get the prefix volume of this volume. Returns self
+        if this is a prefix."""
+        if self.is_prefix():
             return self
         else:
-            return BVol(root)
+            return BVol(prefix)
 
     def get_orig(self):
         """Returns the snapshot destination if this is a
         snapshot or self if this is not a snapshot."""
         if self.is_snap():
-            return BVol(root, pool, subvol)
+            return BVol(prefix, pool, subvol)
         else:
             return self
 
@@ -361,7 +367,7 @@ class BVol:
             prefl = len(self.pathin_pool()) + 1
             l= (v for v in l if ( "/" not in v[prefl:]) )
 
-        return (BVol.fromSubvol(self.root, self.pool, v) for v in l)
+        return (BVol.fromSubvol(self.prefix, self.pool, v) for v in l)
 
     def __subtree_ALL(self, **A):
         """Helper for subtree: the entire subtree."""
@@ -376,7 +382,7 @@ class BVol:
     def subtree(self, **A):
         """Like childs, but also includes SELF.
         Supports the only='vols' argument to exclude
-        pools and roots."""
+        pools and prefixs."""
         only = default(A, 'only')
 
         if only == 'vols':
@@ -410,7 +416,7 @@ class BVol:
         created clone. If the 'recursive' flag is set each
         subvolume will be cloned too. In this case all
         created clones will be returned as an array. Does
-        not work on roots; pools can not have snapshots but
+        not work on prefixs; pools can not have snapshots but
         might be used with recursion. If the 'readonly'
         flags is set the snapshot will be created...read
         only. The flag 'relative_to'=$path can be used to
@@ -449,7 +455,7 @@ class BVol:
         title and returns the BVol for it.
         If the 'recursive' flag is given snapshots will be
         created for every child and their BVols will be
-        returned in an array. Does not work on roots; pools
+        returned in an array. Does not work on prefixs; pools
         can not have snapshots but might be used with
         recursion. The return value will be the BVol object
         of the snapshot created or a list of BVols for the
@@ -463,7 +469,7 @@ class BVol:
                 readonly=True)
         
     def do_destroy(self, **A):
-        """Destroys this volume. Does not work on roots and
+        """Destroys this volume. Does not work on prefixs and
         pools. If the volume has childs the 'recursive' flag
         must be used. Returns the bvols of the volumes
         destroyed. """
@@ -518,7 +524,7 @@ class BVol:
         so that a maximum of $limit snapshots is kept.
         Returns an array  containing the BVols for
         [$created, $deleted].
-        Does not work on roots; pools
+        Does not work on prefixs; pools
         can not have snapshots but might be used with
         recursion.
         Returns a tuple consisting of iterables for (1) the
@@ -607,7 +613,7 @@ class BVol:
     def tar_send(iot=sys.stdout, **A):
         """Creates a complex send stream with the support
         for snapshots and recursive sends.
-        If recursive!=true, this may not be a pool or root.
+        If recursive!=true, this may not be a pool or prefix.
 
         Args:
           iot - File object that specifies where to write
@@ -637,8 +643,121 @@ class BVol:
 # SETUP
 
 cfg={
-    'root': default(os.environ, "BVOL_ROOT", "/bvol")
+    'prefix': default(os.environ, "BVOL_ROOT", "/bvol")
 }
 
 #####################################################
 # COMMANDS
+
+# bvol [-p PREFIX | --prefix PREFIX]
+
+# snap auto [--noconfirm] PATH ID KEEP
+# snap mk PATH NAME
+# sub create PATH
+# sub destroy [-r | --recursive] [--noconfirm] PATH
+# sub clone --ro PATH PATH
+# send [-r | --recursive] NAME [NAME...] > FILE
+# send [--plain] > FILE
+# recv < FILE
+# recv --plain < FILE
+# list [-s | --snaps | -S | --nosnaps] [-r | --recursive] PATH
+
+#def c_snap_auto(args):
+#def c_snap_mk(args):
+#def c_snap_destroy(args):
+#def c_sub_create(args):
+#def c_sub_destroy(args):
+#def c_send(args):
+#def c_recv(args):
+#def c_list(args):
+
+def apa():
+    """Generates the argument parse used by main"""
+    m = ap.ArgumentParser(add_help = False)
+
+    m.add_argument("--prefix", "-p", dest='prefix',
+            default=cfg['prefix'])
+
+    m.add_argument("-v", "--verbose",
+            dest='verbosity',
+            action="count")
+    m.add_argument("--verbosity",
+            dest="verbosity",
+            action="store",
+            type=int)
+    m.add_argument("--quiet", "-q",
+            dest="verbosity",
+            action="store_const",
+            const="-1")
+
+
+    m.add_argument("--noconfirm", "--nc",
+            dest="noconfirm",
+            action="store_true",
+            default=False)
+    m.add_argument("--do-confirm",
+            dest="noconfirm",
+            action="store_false")
+
+    m.add_argument("--simulate", "--dry-run",
+            dest="simulate",
+            action="store_true",
+            default=False)
+
+
+    m.add_argument("--recursive", "-r",
+            dest="recursive",
+            action="store_true",
+            default=False)
+    m.add_argument("--no-snaps", "-n",
+            dest="no_snaps",
+            action="store_true",
+            default=False)
+    m.add_argument("--only-snaps", "-s",
+            dest="only_snaps",
+            action="store_true",
+            default=False)
+
+    m_ = m.add_subparsers()
+
+    # help
+    m_help = m_.add_parser('help', aliases=['h'])
+
+    m_auto = m_.add_parser('autosnap', aliases=['asnap'])
+    m_auto.add_argument("vol")
+    m_auto.add_argument("name")
+    m_auto.add_argument("keep", type=int)
+
+
+    m_mksnap = m_.add_parser('make-snap',
+            aliases=['mksnap','snap'])
+    m_mksnap.add_argument("vol")
+    m_mksnap.add_argument("name")
+
+
+    m_create = m_.add_parser("make-sub",
+            aliases=['mksub', 'sub'])
+    m_create.add_argument("vol")
+    
+    
+    m_destroy = m_.add_parser("destroy",
+            aliases = ['del', 'rm', 'remove', 'delete'])
+    m_destroy.add_argument("vol")
+
+
+    m_clone = m_.add_parser("clone")
+    m_clone.add_argument("src")
+    m_clone.add_argument("dest")
+    m_clone.add_argument("-ro")
+
+    
+    m_list = m_.add_parser("list", aliases=['ls'])
+    m_list.add_argument("vol")
+
+    return m
+
+def main(argv):
+    print(apa().parse_args(argv))
+
+if __name__ == "__main__":
+    main(tail(sys.argv))
