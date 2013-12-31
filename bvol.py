@@ -1,14 +1,18 @@
-#/usr/bin/env python3
+#! /usr/bin/env python3
 
 # TODO: Use argparse namespaces
 # TODO: Check in list
 # TODO: Harsh checking
 # TODO: Assertations for is_pool...
 # TODO: recurse in named args is bad style
+# TODO: Some verbose output
+# TODO: Checks should do actual checks in FS
 
 import argparse
+import tarfile
 import time
 import sys
+import io
 import os
 import os.path as path
 import subprocess as sub
@@ -31,7 +35,6 @@ def flag(dic, name, norm=False):
 
 def empty(iterbl):
     """Check if a string is empty"""
-    print("empty?: ", iterbl)
     return len(iterbl) == 0
 
 def join(*argv, **A):
@@ -45,6 +48,7 @@ def join(*argv, **A):
 def fill(l, no, default=None):
     """Append so many $defaults to l that it has at least no
     values."""
+    assert no > 0, "no > 0"
     return l + ([default] * (no - len(l)))
 
 def epoch():
@@ -59,17 +63,17 @@ def ttystr(b):
     else:
         return b
 
-def wrap_iter(e):
-    """Force the element to be an iterable. 
-    Returns just the element if it's already an iterable,
-    otherwise returns a tuple with `e` as the single element."""
+def wrap_list(e):
+    """Force the element to be an iterable.  Returns just
+    the element if it's already an iterable, otherwise
+    returns a tuple with `e` as the single element."""
     if hasattr(e, '__iter__'):
         return e
     else:
         return (e,)
 
-def unwrap_iter(l__):
-    """Reverse of wrap_iter.
+def unwrap_list(l__):
+    """Reverse of wrap_list.
     If l__ contains a single element l__[0] is returned.
     If it is empty or contains more a,
     list with all the elements is returned.
@@ -79,6 +83,26 @@ def unwrap_iter(l__):
         return l[1]
     else:
         return l
+
+def compatl(l):
+    """Builds an iterator from the given list that skips
+    None values."""
+    return (v for v in l if v != None)
+
+def XOR(*arg):
+    """Boolean XOR. Inverse of XNOR.
+    Takes any number of arguments. Will return true, if the
+    number of truthy arguments is odd. For two arguments
+    this is equal to `bool(a) != bool(b)`."""
+    # This works because True<=>1, False<=>0
+    return bool( sum(map(bool, arg)) % 2 )
+
+def XNOR(*arg):
+    """Boolean XNOR. Inverse of XOR.
+    Takes any number of arguments and returns, wether the
+    number of truthy arguments is even. For two arguments
+    this is equivalent to `bool(a) == bool(b)`."""
+    return not XOR(*arg)
 
 #######################################################
 # BTRFS
@@ -106,11 +130,18 @@ def btrfs_list(mnt):
     x= ( (e.path, e) for e in x)
     return dict(x)
 
+class BVolAssertError(IOError):
+    pass
+
 class BVol:
+    def fromPathInRoot(root, pa):
+        pool, subvol = fill(pa.split("/", 1), 2, '')
+        self.fromPathInPool(rppt, pool, subvol)
+
     # TODO: Subvol: with snapname <=> without
     # TODO: Use [path]
     @staticmethod
-    def fromSubvol(root, pool, subvol):
+    def fromPathInPool(root, pool, subvol):
         pathar = subvol.split('/')
         atsegs = pathar[-1].split("@")
         if len(atsegs) > 1:
@@ -142,7 +173,8 @@ class BVol:
         return self.pathin_fs()
 
     def __eq__(self, other):
-        return self is other  or  self.pathin_fs() == other.pathin_fs()
+        return self is other \
+            or  self.pathin_fs() == other.pathin_fs()
 
     def __cwd(self):
         """Directory this normally operates in"""
@@ -192,6 +224,9 @@ class BVol:
         (if this is a snapshot)."""
         return self.volname() + self.__snapsuf()
 
+    def exists(self):
+        return path.exists(self.pathin_fs)
+
     def is_pool(self):
         return not empty(self.pool) and     empty(self.subvo)
 
@@ -203,6 +238,68 @@ class BVol:
 
     def is_snap(self):
         return empty(self.snapname)
+
+    def _ver_(self, boll, msg,
+            action="--", expect=True, skip=False):
+        """Raises an BVolAssertError with the given message,
+        and the given action if `boll is not expect`. Both
+        boll and expect are interpreted as booleans.  msg
+        shall contain an info of what has gone wrong, action
+        shall contain an info, during which action something
+        has gone wrong.
+        If skip is set, the checking is skipped """
+        if (not skip) and XOR(expect, boll):
+            stat = ""
+            if not expect:
+                stat = "[NOT] "
+
+            raise BVolAssertError(join(
+                "BVol assertation Error.",
+                "\nREASON: ", stat, msg,
+                "\nDURING: ", action,
+                "\nBVol: ", self.pathin_fs,
+                "\n| ROOT: ", self.root,
+                "\n| POOL: ", self.pool,
+                "\n| SUBV: ", self.subvol,
+                "\n| SNAP: ", self.snapname,
+                "\n"))
+
+    def ver_exists(action="--", expect=False, skip=False):
+        """Raise an error if this BVol exists in the FS or
+        if it does not, depending on expect.
+        BE CAREFUL: DEFAULT VALUE FOR EXPECT=FALSE."""
+        _ver_(self.exists(), 
+                "BVol does exist", expect, skip)
+
+    def ver_pool(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a pool or if it is
+        not, depending on expect."""
+        _ver_(self.is_pool(),
+                "BVol is a pool", expect, skip)
+
+    def ver_root(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a root or if it is
+        not, depending on expect."""
+        _ver_(self.is_root(),
+                "BVol is a root", expect, skip)
+
+    def ver_pool(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a pool or if it is
+        not, depending on expect."""
+        _ver_(self.is_pool(),
+                "BVol is a pool", expect, skip)
+ 
+    def ver_subvol(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a subvol or if it
+        is not, depending on expect."""
+        _ver_(self.is_subvol(),
+                "BVol is a subvol", expect, skip)
+
+    def ver_pool(action="--", expect=True, skip=False):
+        """Raise an error if this bvol is a pool or if it is
+        not, depending on expect."""
+        _ver_(self.is_pool(),
+                "Subvol is a pool", expect, skip)
 
     def get_container(self):
         """Returns the volume holding this volume or '' if
@@ -303,7 +400,7 @@ class BVol:
 
         # Now all the childs
         prefl = len(self.pathin_pool())
-        childs = self.childs(recursive=True):
+        childs = self.childs(recursive=True)
 
         cloneschild.do_clone(child.pathin_pool()[prefl:], **C)
 
@@ -336,8 +433,8 @@ class BVol:
                 ['btrfs', 'subvolume', 'snapshot', 
                     self.pathin_fs(), 
                     './' + targ] + params,
-                stdout = STDOUT, stderr = STDERR,
-                stdin = STDIN,
+                stdout = sys.stdout, stderr = sys.stderr,
+                stdin = sys.stdin,
                 cwd=cwd)
 
     def __do_snap_REC(self, name, **A):
@@ -378,15 +475,16 @@ class BVol:
         delargs = (v.pathin_pool() for v in todel)
         proc = sub.Popen(
                 ['btrfs', 'subvolume', 'destroy'] + delargs,
-                stdout = STDOUT, stderr = STDERR,
-                stdin = STDIN,
+                stdout = sys.stdout, stderr = sys.stderr,
+                stdin = sys.stdin,
                 cwd=self.cwd())
-        return unwrap_iter(todel)
+        return unwrap_list(todel)
 
     def __do_autosnap_DROP_parse(self, typ, limit, pref, splitc, **A):
-        "Parse info for a snapshot and make shure it is
-        valid and fits the given arguments.  Returns either None (if
-        it is invalid) or the unixtime at the creation of this snapshot."
+        """Parse info for a snapshot and make sure it is valid
+        and fits the given arguments.  Returns either None
+        (if it is invalid) or the unixtime at the creation
+        of this snapshot."""
         try:
             n = s.snapname()
             n_seg = split(splitc)
@@ -395,9 +493,7 @@ class BVol:
         except:
             return None
 
-        if p != prefix 
-                or typ != suf
-                or len(n_set) != 3:
+        if (p != prefix) or (typ != suf) or len(n_set) != 3:
             return None
 
         return time
@@ -441,59 +537,108 @@ class BVol:
 
         return (new, dropped)
 
+    def basic_send(iot=sys.stdout, **A):
+        """Generates a very basic send stream without the
+        capabiliy of sendstreams with multiple subvolumes.
+        Same as using 'btrfs send ...'. The stream is
+        written to the writable stream specified in the iot
+        argument.
+        You can specify a 'verbosity'=N parameter to set the
+        verbosity level. 'base'=[BVol] or 'base'=Bvol can
+        be used to specifiy bases for incremental snapshots
+        (equiv. to -i). Use 'parent' to specify…a parent
+        ('-p').
+        Returns iot."""
+
+        p = []
+
+        verbosity = default(A, 'verbosity', 0)
+        p_verb = itr.repeat('-v', verbosity)
+        p.push(p_verb)
+
+        paren = default(A, 'parent')
+        if paren:
+            p_paren = ['-p', paren.pathin_pool()]
+            p.push(p_paren)
+
+        basevol = default(A, 'base')
+        p_base= wrap_list(base)
+        p_base= compact(base)
+        p_base= ( ('-p', v.pathin_pool()) for v in base)
+        p_base= flat1(p_base)
+        p.push(p_base)
+
+        path = self.pathin_pool()
+        cmd = itr.chain(('btrfs', 'send', path), itr.chain(p))
+
+        stream = default(A, 'stream', )
+
+        proc = sub.Popen(
+                cmd,
+                stdout = iot, stderr = sys.stderr,
+                stdin = sys.stdin,
+                cwd=self.cwd())
+
+        return iot
+
+    def basic_recv(ios=sys.stdin, **A):
+        """Recieve a basic  send stream (the ones generated
+        by `basic send`). This is equivalent to the
+        `btrfs recieve ...` command.
+        You can specify a 'verbosity'=N parameter to set the
+        verbosity level.
+        Returns ios.""" 
+
+        p = []
+        verbosity = default(A, 'verbosity', 0)
+        p_verb = itr.repeat('-v', verbosity)
+        p.push(p_verb)
+
+        path = self.pathin_pool()
+
+        proc = sub.Popen(
+                itr.chain(('btrfs', 'recieve'), p, path),
+                stdout = sys.stdout, stderr = sys.stderr,
+                stdin = ios,
+                cwd=self.cwd())
+
+        return ios
+
+    def tar_send(iot=sys.stdout, **A):
+        """Creates a complex send stream with the support
+        for snapshots and recursive sends.
+        If recursive!=true, this may not be a pool or root.
+
+        Args:
+          iot - File object that specifies where to write
+                the tar file generated to.
+          recursive=True - Wether to include subvolumes
+          incremental=True - Wether to include snapshots.
+          base=[BVol] - A list of volumes that are available
+                        on the reieving side."""
+        rec = flag(A, "recursive", True)
+        inc = flag(A, "incremental", True)
+        base = default(A, "base", ())
+
+        if rec: # RECURSIVE (, INCREMENTAL)
+            exp = self.subtree(only="vols")
+
+            if not (flag(A, "incremental", True)):
+                exp = (v for v in exp if not v.is_snap())  
+        elif inc: # NOT RECURSIVE, INCREMENTAL
+            exp = itr.chain((this), self.snapshots())
+        else: # NEITHER RECURSIVE NOR INCREMENTAL
+            exp = (this)
+
+        if len(base) > 0:
+            exp = (v for v in exp if v not in base)
 
 ######################################################
 # SETUP
 
 cfg={
-    'root': default(os.environ, "BVOL_ROOT", default="/bvol")
+    'root': default(os.environ, "BVOL_ROOT", "/bvol")
 }
 
 #####################################################
 # COMMANDS
-
-def cmd_attach(__argv):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("dev", 
-        help="The block device containing the btrfs partition to attach")
-    ap.add_argument("name",
-        help="The name of the volume.")
-    ap.add_argment("-o", "--mount-options",
-        help="You can also parse options like with mount")
-    argv = ap.parse_args(args=__argv)
-
-    os.call([
-        "mount", 
-        "-t",     "btrfs",
-        "-o",     argv.mount-options, 
-        argv.dev,
-        argv.name
-    ])
-
-
-def cmd_detach(__argv):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("name", 
-        help="The name of the volume to unmount")
-    argv = ap.parse_args(args=__argv)
-
-    os.call([
-        "umount", 
-        resolve(argv.name, abs=True)
-    ])
-
-def cmd_list(argv):
-    ap = argparse.ArgumentParser()
-    ap.add_argument("vol", 
-        help="The name of the volume to unmount")
-    argv = ap.parse_args(args=__argv)
-
-
-def cmd_snap(argv):
-    pass
-
-def cmd_delete(argv):
-    pass
-
-def cmd_autosnap(argv):
-    pass
